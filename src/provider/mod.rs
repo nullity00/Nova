@@ -9,8 +9,8 @@ pub mod poseidon;
 pub mod secp_secq;
 
 // crate-private modules
-#[cfg(feature = "blitzar")]
-pub(crate) mod blitzar;
+#[cfg(feature = "icicle")]
+pub(crate) mod icicle;
 pub(crate) mod keccak;
 pub(crate) mod pedersen;
 pub(crate) mod ptau;

@@ -42,7 +42,7 @@ crate::impl_traits_no_dlog_ext!(
 );
 
 impl DlogGroupExt for bn256::Point {
-  #[cfg(not(feature = "blitzar"))]
+  #[cfg(not(feature = "icicle"))]
   fn vartime_multiscalar_mul(scalars: &[Self::Scalar], bases: &[Self::AffineGroupElement]) -> Self {
     msm(scalars, bases)
   }
@@ -54,17 +54,17 @@ impl DlogGroupExt for bn256::Point {
     msm_small(scalars, bases)
   }
 
-  #[cfg(feature = "blitzar")]
+  #[cfg(feature = "icicle")]
   fn vartime_multiscalar_mul(scalars: &[Self::Scalar], bases: &[Self::AffineGroupElement]) -> Self {
-    super::blitzar::vartime_multiscalar_mul(scalars, bases)
+    super::icicle::vartime_multiscalar_mul(scalars, bases)
   }
 
-  #[cfg(feature = "blitzar")]
+  #[cfg(feature = "icicle")]
   fn batch_vartime_multiscalar_mul(
     scalars: &[Vec<Self::Scalar>],
     bases: &[Self::AffineGroupElement],
   ) -> Vec<Self> {
-    super::blitzar::batch_vartime_multiscalar_mul(scalars, bases)
+    super::icicle::batch_vartime_multiscalar_mul(scalars, bases)
   }
 }
 

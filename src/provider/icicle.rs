@@ -1,41 +1,95 @@
-//! This module implements variable time multi-scalar multiplication using Blitzar's GPU acceleration
-use blitzar;
+//! This module implements variable time multi-scalar multiplication using Icicle's GPU acceleration
 use halo2curves::bn256::{Fr as Scalar, G1Affine as Affine, G1 as Point};
+use icicle_core::{curve::Curve, msm, msm::MSMConfig};
+use icicle_runtime::{memory::HostSlice, runtime, Device};
 
-/// A trait that provides the ability to perform multi-scalar multiplication in variable time
-pub fn vartime_multiscalar_mul(scalars: &[Scalar], bases: &[Affine]) -> Point {
-  let mut blitzar_commitments = vec![Point::default(); 1];
+/// Initialize Icicle runtime if not already initialized
+fn ensure_icicle_initialized() {
+  // Load backend from environment or default
+  let _ = runtime::load_backend_from_env_or_default();
 
-  let scalar_bytes: Vec<[u8; 32]> = scalars.iter().map(|s| s.to_bytes()).collect();
-
-  blitzar::compute::compute_bn254_g1_uncompressed_commitments_with_halo2_generators(
-    &mut blitzar_commitments,
-    &[(&scalar_bytes).into()],
-    bases,
-  );
-
-  blitzar_commitments[0]
+  // Try to set CUDA device if available
+  let cuda_device = Device::new("CUDA", 0);
+  if runtime::is_device_available(&cuda_device).unwrap_or(false) {
+    let _ = runtime::set_device(&cuda_device);
+  }
 }
 
-/// A trait that provides the ability to perform a batch of multi-scalar multiplication in variable time
+/// A function that performs multi-scalar multiplication in variable time
+pub fn vartime_multiscalar_mul(scalars: &[Scalar], bases: &[Affine]) -> Point {
+  // Handle empty input case
+  if scalars.is_empty() || bases.is_empty() {
+    return Point::default();
+  }
+
+  ensure_icicle_initialized();
+
+  // Prepare result vector
+  let mut result = vec![Point::default(); 1];
+
+  // Perform MSM using Icicle
+  msm::msm(
+    HostSlice::from_slice(scalars),
+    HostSlice::from_slice(bases),
+    &MSMConfig::default(),
+    HostSlice::from_mut_slice(&mut result),
+  )
+  .unwrap_or_else(|_| {
+    // Fallback to CPU implementation if Icicle fails
+    let mut sum = Point::default();
+    for (scalar, base) in scalars.iter().zip(bases.iter()) {
+      sum += *base * scalar;
+    }
+    result[0] = sum;
+  });
+
+  result[0]
+}
+
+/// A function that performs a batch of multi-scalar multiplication in variable time
 pub fn batch_vartime_multiscalar_mul(scalars: &[Vec<Scalar>], bases: &[Affine]) -> Vec<Point> {
-  let mut blitzar_commitments = vec![Point::default(); scalars.len()];
+  // Handle empty input case
+  if scalars.is_empty() || bases.is_empty() {
+    return vec![Point::default(); scalars.len()];
+  }
 
-  let scalar_bytes: Vec<Vec<[u8; 32]>> = scalars
-    .iter()
-    .map(|s| s.iter().map(|v| v.to_bytes()).collect())
-    .collect();
+  ensure_icicle_initialized();
 
-  let scalars_table: Vec<blitzar::sequence::Sequence<'_>> =
-    scalar_bytes.iter().map(|s| s.into()).collect();
+  // Prepare result vector
+  let mut results = vec![Point::default(); scalars.len()];
 
-  blitzar::compute::compute_bn254_g1_uncompressed_commitments_with_halo2_generators(
-    &mut blitzar_commitments,
-    &scalars_table,
-    bases,
-  );
+  // Process each batch separately
+  for (i, scalar_batch) in scalars.iter().enumerate() {
+    if scalar_batch.is_empty() {
+      results[i] = Point::default();
+      continue;
+    }
 
-  blitzar_commitments
+    // Use only the needed number of bases for this batch
+    let bases_to_use = &bases[..std::cmp::min(scalar_batch.len(), bases.len())];
+
+    // Perform MSM for this batch
+    let mut batch_result = vec![Point::default(); 1];
+
+    msm::msm(
+      HostSlice::from_slice(scalar_batch),
+      HostSlice::from_slice(bases_to_use),
+      &MSMConfig::default(),
+      HostSlice::from_mut_slice(&mut batch_result),
+    )
+    .unwrap_or_else(|_| {
+      // Fallback to CPU implementation if Icicle fails
+      let mut sum = Point::default();
+      for (scalar, base) in scalar_batch.iter().zip(bases_to_use.iter()) {
+        sum += *base * scalar;
+      }
+      batch_result[0] = sum;
+    });
+
+    results[i] = batch_result[0];
+  }
+
+  results
 }
 
 #[cfg(test)]
@@ -120,6 +174,21 @@ mod tests {
   }
 
   #[test]
+  fn test_vartime_multiscalar_mul_with_msm_best() {
+    let mut rng = rand::thread_rng();
+    let sample_len = 100;
+
+    let (scalars, bases): (Vec<_>, Vec<_>) = (0..sample_len)
+      .map(|_| (Scalar::random(&mut rng), Affine::random(&mut rng)))
+      .unzip();
+
+    let result = vartime_multiscalar_mul(&scalars, &bases);
+    let expected = msm_best(&scalars, &bases);
+
+    assert_eq!(result, expected);
+  }
+
+  #[test]
   fn test_batch_vartime_multiscalar_mul() {
     let mut rng = rand::thread_rng();
     let batch_len = 20;
@@ -143,21 +212,6 @@ mod tests {
           .sum()
       })
       .collect();
-
-    assert_eq!(result, expected);
-  }
-
-  #[test]
-  fn test_vartime_multiscalar_mul_with_msm_best() {
-    let mut rng = rand::thread_rng();
-    let sample_len = 100;
-
-    let (scalars, bases): (Vec<_>, Vec<_>) = (0..sample_len)
-      .map(|_| (Scalar::random(&mut rng), Affine::random(&mut rng)))
-      .unzip();
-
-    let result = vartime_multiscalar_mul(&scalars, &bases);
-    let expected = msm_best(&scalars, &bases);
 
     assert_eq!(result, expected);
   }
